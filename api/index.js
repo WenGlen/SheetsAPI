@@ -61,14 +61,12 @@ async function getRange(sheetId, range) {
   return res.data.values || [];
 }
 
-// ─── API 稽核 log → 固定試算表 SheetsAPI 分頁：/api/:sheet 底下每次呼叫（GET/POST/PUT/DELETE）皆寫入 ──
-
-const DEFAULT_ACCESS_LOG_SPREADSHEET_ID = '1mqe413XRGlY0ZzW2dDf12MB72un7XEXcYKv6DmbgY5E';
+// ─── API 稽核 log（預設關閉）：僅在設定 ACCESS_LOG_SPREADSHEET_ID 時，/api/:sheet 每次 res.json 會 append 至該試算表 SheetsAPI!A:J ──
 
 function getAccessLogSpreadsheetId() {
   const v = process.env.ACCESS_LOG_SPREADSHEET_ID;
-  if (v === '' || v === 'false' || v === '0') return null;
-  return v || DEFAULT_ACCESS_LOG_SPREADSHEET_ID;
+  if (v == null || v === '' || v === 'false' || v === '0') return null;
+  return v;
 }
 
 function truncateStr(str, maxLen) {
