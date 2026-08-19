@@ -35,7 +35,8 @@ function buildEndpoints(sheet) {
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/formatSimple`, description: '編輯格式（簡化）  body: { range: {...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }' },
     { method: 'PUT',    url: `/api/${sheet}/moveTab=:tab/toIndex=:index`, description: '移動分頁到指定位置，:index 為目標排序（0 = 最前）' },
     { method: 'PUT',    url: `/api/${sheet}/tab=:tab/col=:col/to=:newCol`, description: '修改欄位名稱，:col 為舊名稱，:newCol 為新名稱（均需 encodeURIComponent 編碼）' },
-    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆資料  body: { values: [...] }' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N`,   description: '更新第 N 筆「整列」資料  body: { values: [...] }。若只想改其中一格，建議改用下方的單格更新，避免覆寫到其他欄。' },
+    { method: 'PUT',    url: `/api/${sheet}/tab=:tab/row=N/col=:col`, description: '只更新「單一儲存格」（推薦：避免整列覆寫造成的同時複寫衝突）。row=N 沿用相同編號（N=1 為第一筆資料，不含標題列）；:col 為標題列的「欄位名稱」（不是 A/B/C 欄位字母），由後端自動對應到正確欄位。body: { value: 值 }' },
     { method: 'DELETE', url: `/api/${sheet}/tab=:tab/row=N`,   description: '清空第 N 筆資料' },
   ];
 }
@@ -75,8 +76,14 @@ function buildOperations(sheet, tabs) {
       updateRow: {
         method: 'PUT',
         url: `/api/${sheet}/tab=${encodedTab}/row=N`,
-        description: '覆寫第 N 筆資料，N 替換為正整數',
+        description: '覆寫第 N 筆「整列」資料，N 替換為正整數。注意：這會覆寫整列所有欄位，若只想改單一格請改用 updateCell，避免蓋掉其他欄的值。',
         body: '{ "values": ["欄位1值", "欄位2值", ...] }',
+      },
+      updateCell: {
+        method: 'PUT',
+        url: `/api/${sheet}/tab=${encodedTab}/row=N/col=:col`,
+        description: '只更新「單一儲存格」（推薦用於局部修改，避免整列覆寫造成的同時複寫衝突）。定位方式：N 為資料列編號（1 = 第一筆資料，不含標題列，與 getRow / getAllRows 完全相同的編號，不必自己 +1）；:col 替換為該儲存格所在「欄位的標題名稱」（就是 getAllRows 回傳物件裡的 key，不是 A/B/C 欄位字母；含中文需 encodeURIComponent 編碼）。系統會自動把「第 N 筆 + 欄位名稱」換算成正確的儲存格位置，你不需要處理標題列位移或欄位字母。',
+        body: '{ "value": "新內容" }',
       },
       deleteRow: {
         method: 'DELETE',
@@ -317,7 +324,13 @@ export const ROUTES = [
     method: 'PUT',
     path: '/api/:sheet/tab=:tab/row=:row',
     name: 'updateRow',
-    description: '覆寫指定分頁第 N 筆資料  body: { values: [...] }',
+    description: '覆寫指定分頁第 N 筆「整列」資料  body: { values: [...] }。只改單一格請改用 updateCell，避免覆寫其他欄。',
+  },
+  {
+    method: 'PUT',
+    path: '/api/:sheet/tab=:tab/row=:row/col=:col',
+    name: 'updateCell',
+    description: '只更新單一儲存格（推薦：避免整列覆寫造成的同時複寫衝突）。row 沿用相同編號（1 = 第一筆資料，不含標題列）；:col 為標題列的「欄位名稱」（非 A/B/C 欄位字母），由後端自動換算到正確欄位。body: { value: 值 }',
   },
   {
     method: 'DELETE',

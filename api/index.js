@@ -616,6 +616,54 @@ app.put('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
   }
 });
 
+// PUT /api/:sheet/tab=:tab/row=:row/col=:col — 只更新單一儲存格
+// 用途：避免用整列更新（updateRow）覆寫到別人同時在改的其他欄，造成同時複寫衝突
+// 定位方式（刻意設計成 AI 不易搞錯）：
+//   row=:row 沿用與 getRow/updateRow 完全相同的編號，1 = 第一筆資料，不含標題列
+//   col=:col 為「標題列的欄位名稱」（不是 A/B/C 欄位字母），由後端自動換算到正確欄位
+// body: { value: 任意值 }
+app.put('/api/:sheet/tab=:tab/row=:row/col=:col', async (req, res) => {
+  try {
+    const { sheet, tab, col } = req.params;
+    const row = parseInt(req.params.row);
+
+    if (isNaN(row) || row < 1) {
+      return res.status(400).json({ error: 'row 必須是大於 0 的整數（1 = 第一筆資料，不含標題列）' });
+    }
+    if (!('value' in req.body)) {
+      return res.status(400).json({ error: 'body 需包含 value 欄位，例如 { "value": "新內容" }' });
+    }
+
+    const sheetId = getSheetId(sheet);
+
+    // 以標題列的欄位名稱定位「欄」：讀第 1 行，找出 col 的索引
+    const headerRows = await getRange(sheetId, `${tab}!1:1`);
+    const headers = headerRows[0] ?? [];
+    const colIndex = headers.indexOf(col);
+    if (colIndex === -1) {
+      return res.status(404).json({
+        success: false,
+        error: `找不到欄位「${col}」。col 需為標題列的欄位名稱（非 A/B/C 欄位字母）。現有欄位：${headers.join('、') || '（無）'}`,
+      });
+    }
+
+    const colLetter = colToLetter(colIndex);
+    const sheetRow = row + 1; // 加 1 跳過標題列（第 1 行）
+    const cell = `${colLetter}${sheetRow}`;
+
+    const result = await sheets.spreadsheets.values.update({
+      spreadsheetId: sheetId,
+      range: `${tab}!${cell}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[req.body.value]] },
+    });
+
+    res.json({ success: true, sheet, tab, row, col, cell, value: req.body.value, result: result.data });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // DELETE /api/:sheet/tab=:tab/row=:row — 清空指定資料列
 app.delete('/api/:sheet/tab=:tab/row=:row', async (req, res) => {
   try {
