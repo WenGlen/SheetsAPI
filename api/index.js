@@ -270,10 +270,10 @@ app.get('/', (req, res) => {
     message: 'Google Sheets API',
     version: '2.0.0',
     usage: '透過 /api/:sheet 指定你要操作的 Sheet，進入後可查看該 Sheet 的可用方法。',
-    example: 'https://greenbox-sheets-api.vercel.app/api/glen',
+    example: 'https://sheets-api-xi.vercel.app/api/glen',
     notSureWhichSheet: {
       hint: '如果不確定要連到哪個 Sheet，可以先進入測試區：',
-      url: 'https://greenbox-sheets-api.vercel.app/api/test',
+      url: 'https://sheets-api-xi.vercel.app/api/test',
       warning: '⚠️ 這是測試用的 Sheet，資料僅供開發驗證。若需操作正式資料，請使用對應的正確路徑。',
     },
   });

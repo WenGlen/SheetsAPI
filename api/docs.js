@@ -122,7 +122,7 @@ function buildTestHowToUse(tabs = []) {
 
   const context = {
     what: SHARED_WHAT,
-    baseUrl: `https://greenbox-sheets-api.vercel.app/api/${SHEET_TEST}/`,
+    baseUrl: `https://sheets-api-xi.vercel.app/api/${SHEET_TEST}/`,
     devNote: '開發完成後，若需要將路徑切換至正式 Sheet，請通知 Glen 協助更新 API 路徑與對應的 Sheet ID。',
   };
 
@@ -172,7 +172,7 @@ function buildPersonalHowToUse(sheet, tabs = []) {
 
   const context = {
     what: SHARED_WHAT,
-    baseUrl: `https://greenbox-sheets-api.vercel.app/api/${sheet}/`,
+    baseUrl: `https://sheets-api-xi.vercel.app/api/${sheet}/`,
   };
 
   if (locked) {
