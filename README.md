@@ -1,313 +1,180 @@
-# Google Sheets API Backend (Vercel Serverless)
+# Google Sheets API (Vercel Serverless)
 
-Vercel Serverless Functions API，用於串接多個 Google Sheets 進行 CRUD 操作。
+以 Express 5 寫成、部署在 Vercel 的 Serverless API，讓程式與 AI Agent 可以透過 HTTP 讀寫多個 Google Sheets。
+
+- 正式站：<https://sheets-api-xi.vercel.app>
+- GitHub：<https://github.com/WenGlen/SheetsAPI>（push 到 `main` 後 Vercel 自動部署）
 
 ## 專案結構
 
 ```
 SheetsAPI/
-├── api/                          # Vercel Serverless Functions
-│   ├── index.js                  # GET /api - 根路由
-│   ├── health.js                 # GET /api/health - 健康檢查
-│   └── sheets/[sheetName]/
-│       ├── data.js               # CRUD operations
-│       ├── batch-get.js          # 批次讀取
-│       └── batch-update.js       # 批次更新
-├── services/
-│   └── googleSheets.js           # Google Sheets 服務模組
-├── credentials/                  # Google Service Account 憑證（本地開發用，不上傳）
-├── server.js                     # 本地開發用 Express 伺服器（保留）
-├── vercel.json                   # Vercel 部署配置
-├── .env                          # 環境變數（不上傳）
-├── .gitignore
+├── api/
+│   ├── index.js                # 所有路由與 Google Sheets 存取邏輯（Express app）
+│   └── docs.js                 # 自我說明文件（HowToUseForAgent / 入口 endpoints 的內容來源）
+├── setup-shopee-templates.js   # 一次性腳本：建立蝦皮相關分頁範本
+├── vercel.json                 # Vercel 部署設定（所有路徑 rewrite 到 /api）
+├── SETUP.md                    # Google Cloud 憑證與 Sheet 權限的詳細設定步驟
+├── .env                        # 環境變數（不上傳）
 ├── package.json
 └── README.md
 ```
 
-## 環境設定
+> `api/index.js` 匯出 Express `app`；本地會 `app.listen`，在 Vercel 上則作為 Serverless Function 匯出。
 
-### 1. 取得 Google Service Account 憑證
+## 核心概念
 
-1. 前往 [Google Cloud Console](https://console.cloud.google.com/)
-2. 建立新專案或選擇現有專案
-3. 啟用 **Google Sheets API**
-4. 建立 Service Account：
-   - 導航至「IAM 與管理」→「服務帳戶」
-   - 點擊「建立服務帳戶」
-   - 填寫名稱後建立
-   - 在服務帳戶的「金鑰」頁籤，點擊「新增金鑰」→「建立新的金鑰」
-   - 選擇 **JSON** 格式下載
-5. 將下載的 JSON 檔案：
-   - **本地開發**：放到專案的 `credentials/` 資料夾
-   - **Vercel 部署**：將整個 JSON 內容複製，稍後設定到 Vercel 環境變數
+- **一個 sheet = 一組環境變數**：URL 的 `:sheet` 會對應到 `SHEET_ID_<大寫>`。
+  例：`/api/glen` → `SHEET_ID_GLEN`、`/api/test` → `SHEET_ID_TEST`。
+- **分頁用 `tab=` 指定**：分頁名稱含中文或特殊字元時，**必須先 `encodeURIComponent` 編碼**再放進 URL。
+  例：`tab=商品毛利計算` → `tab=%E5%95%86%E5%93%81%E6%AF%9B%E5%88%A9%E8%A8%88%E7%AE%97`。
+  可先呼叫 `GET /api/:sheet/tabsName` 取得原始分頁名稱再自行編碼。
+- **`row` 編號不含標題列**：`row=1` 是第一筆「資料」，也就是試算表的第 2 行。標題列位移由後端處理，呼叫端不必自己 +1。
+- **單格更新**：`PUT .../row=N/col=欄位名` 一次只改一格，避免用整列更新覆寫到其他欄造成的同時複寫衝突。詳見下方〈儲存格定位規則〉。
+- **給 AI Agent 的自我說明**：`GET /api/:sheet/HowToUseForAgent` 會回傳一份完整、機器可讀的用法說明（含每個分頁的操作與已編碼好的 URL），讓 Agent 不必猜路徑。
 
-### 2. 設定 Google Sheets 權限
+## 環境變數
 
-1. 開啟你要串接的 Google Sheets
-2. 點擊右上角「共用」
-3. 將 Service Account 的 email（在 JSON 檔案的 `client_email` 欄位）加入為**編輯者**
+在 `.env`（本地）或 Vercel 專案設定中配置。憑證擇一即可：
 
-### 3. 本地開發環境設定
-
-支援三種環境變數配置方式，選擇其中一種即可：
-
-#### 方式 1：分開的環境變數（推薦，適合本地開發）
+### 憑證方式 A：分開的欄位（適合本地開發）
 
 ```env
-# Server Configuration
-PORT=3000
-
-# Google Service Account Credentials（從下載的 JSON 檔案複製）
-GOOGLE_PROJECT_ID=your-project-id
 GOOGLE_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
 GOOGLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-
-# Google Sheets IDs
-SHEET_ID_TEST=1vQ5JuVS7oauhh78NnkmjpR2-nwCG31LUvgyGyHdR4U4
-SHEET_ID_USERS=1ABC123def456GHI789jkl
-SHEET_ID_ORDERS=1XYZ789abc012MNO345pqr
 ```
 
-#### 方式 2：使用 JSON 檔案路徑
+### 憑證方式 B：完整 JSON 字串（適合 Vercel）
 
 ```env
+GOOGLE_CREDENTIALS_JSON={"type":"service_account","client_email":"...","private_key":"..."}
+```
+
+### Sheet ID 與其他設定
+
+```env
+# 每個要串接的 sheet 各一行，key 為 SHEET_ID_<路徑大寫>
+SHEET_ID_GLEN=1zdD...B4v8
+SHEET_ID_TEST=1vQ5...R4U4
+
+# 本地開發用（Vercel 上會忽略）
 PORT=3000
-GOOGLE_CREDENTIALS_PATH=./credentials/service-account.json
 
-SHEET_ID_TEST=your_google_sheet_id_here
+# 選填：設定後，每次 /api/:sheet 的請求會把稽核紀錄 append 到該試算表的 SheetsAPI!A:J
+# 留空 / false / 0 代表關閉
+ACCESS_LOG_SPREADSHEET_ID=
 ```
 
-#### 方式 3：完整 JSON 字串（適合 Vercel 部署）
-
-```env
-GOOGLE_CREDENTIALS_JSON={"type":"service_account","project_id":"...","private_key":"...","client_email":"..."}
-
-SHEET_ID_TEST=your_google_sheet_id_here
-```
-
-**Sheet ID 取得方式**：
-- 從 Google Sheets URL 取得：`https://docs.google.com/spreadsheets/d/1ABC...XYZ/edit`
-- Sheet ID 就是 `/d/` 和 `/edit` 之間的部分：`1ABC...XYZ`
+> Sheet ID 是 Google Sheets 網址 `/d/` 與 `/edit` 之間那一段。
+> 取得憑證、啟用 Google Sheets API、把 Service Account 加入 Sheet 編輯者的完整步驟見 [SETUP.md](SETUP.md)。
 
 ## 本地開發
 
 ```bash
-# 安裝依賴
 npm install
 
-# 方式 1: 使用 Vercel CLI 本地測試（推薦）
-npm install -g vercel
-vercel dev
+# 方式 1：Vercel 環境（最接近正式）
+npm run dev        # = vercel dev
 
-# 方式 2: 使用 Express 伺服器（保留的舊版）
-npm start
+# 方式 2：純 Express
+npm start          # = node api/index.js，預設 http://localhost:3000
 ```
-
-本地伺服器會在 `http://localhost:3000` 啟動。
 
 ## 部署到 Vercel
 
-### 方式 1: 使用 Vercel Dashboard（推薦）
+已與 GitHub 連動：**push 到 `main` 後 Vercel 會自動重新部署**。
 
-1. 前往 [Vercel Dashboard](https://vercel.com/dashboard)
-2. 點擊 **Add New** → **Project**
-3. 選擇你的 GitHub repository（`WenGlen/SheetsAPI`）
-4. 點擊 **Import**
-5. 設定環境變數（Environment Variables）：
+首次設定或改環境變數時，在 Vercel 專案的 **Settings → Environment Variables** 填入上述 `GOOGLE_CREDENTIALS_JSON`（或分開的 `GOOGLE_CLIENT_EMAIL` + `GOOGLE_PRIVATE_KEY`）與各 `SHEET_ID_*`，再重新部署即可。
 
-   | Name | Value |
-   |------|-------|
-   | `GOOGLE_CREDENTIALS_JSON` | 貼上完整的 Service Account JSON 內容 |
-   | `SHEET_ID_EXAMPLE` | `your_google_sheet_id_here` |
-   | `SHEET_ID_USERS` | `1ABC123def456GHI789jkl` |
-   | `SHEET_ID_ORDERS` | `1XYZ789abc012MNO345pqr` |
+## API 端點
 
-6. 點擊 **Deploy**
+以下 `:sheet` 代換為 sheet 名稱（如 `glen`）、`:tab` 為 **encodeURIComponent 編碼後**的分頁名稱、`N` 為資料列編號（1 起算，不含標題列）。
 
-### 方式 2: 使用 Vercel CLI
+### 探索與說明
 
-```bash
-# 安裝 Vercel CLI
-npm install -g vercel
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/` | API 入口導覽 |
+| GET | `/api/health` | 健康檢查 |
+| GET | `/api/:sheet` | 該 sheet 的說明與端點列表 |
+| GET | `/api/:sheet/HowToUseForAgent` | 完整用法說明（供 AI Agent 讀取） |
+| GET | `/api/:sheet/HowToUseForAgent/分頁1/分頁2/...` | 同上，但把操作範圍鎖定在指定分頁 |
+| GET | `/api/:sheet/tabsName` | 取得所有分頁名稱（原始、未編碼） |
+| GET | `/api/debug/auth` | 測試 Google 憑證是否正常 |
 
-# 登入
-vercel login
+### 讀取
 
-# 部署
-vercel
+| Method | Path | 說明 |
+|---|---|---|
+| GET | `/api/:sheet/tabRaw=:tab` | 分頁原始二維陣列（不處理標題） |
+| GET | `/api/:sheet/tab=:tab` | 分頁全部資料（物件陣列，第一行為欄位名） |
+| GET | `/api/:sheet/tab=:tab/row=N` | 第 N 筆資料 |
+| GET | `/api/:sheet/tab=:tab/row=X-Y` | 第 X～Y 筆資料（含頭尾） |
+| GET | `/api/:sheet/tab=:tab/format=:range` | 讀取儲存格格式，`:range` 為 A1 notation（如 `B2:J7`） |
 
-# 部署到正式環境
-vercel --prod
-```
+### 寫入資料列 / 儲存格
 
-部署後，你會得到一個網址，例如：`https://your-project.vercel.app`
+| Method | Path | 說明 |
+|---|---|---|
+| POST | `/api/:sheet/tab=:tab` | 新增資料到末尾。body：`{ values:[...] }`（單筆）、`{ values:[[...],[...]] }`（多筆）、或 `{ rows:[{欄位名:值},...] }`（依標題對齊） |
+| PUT | `/api/:sheet/tab=:tab/row=N` | 更新第 N 筆**整列**。body：`{ values:[...] }` |
+| PUT | `/api/:sheet/tab=:tab/row=N/col=:col` | 更新**單一儲存格**（推薦；避免整列覆寫）。body：`{ value: 值 }` |
+| DELETE | `/api/:sheet/tab=:tab/row=N` | 清空第 N 筆資料（列保留、內容清除） |
 
-### 設定環境變數（CLI）
+### 欄位
 
-```bash
-# 新增環境變數
-vercel env add GOOGLE_CREDENTIALS_JSON
-# 然後貼上完整的 JSON 內容
+| Method | Path | 說明 |
+|---|---|---|
+| POST | `/api/:sheet/tab=:tab/col=:col` | 在標題列末尾新增欄位，可選填 `{ values:[...] }` 一併填各列值 |
+| PUT | `/api/:sheet/tab=:tab/col=:col/to=:newCol` | 修改欄位名稱 |
 
-vercel env add SHEET_ID_USERS
-# 輸入 Sheet ID
-```
+### 分頁
 
-## API 使用說明
+| Method | Path | 說明 |
+|---|---|---|
+| POST | `/api/:sheet/createTab=:tab` | 建立新分頁 |
+| PUT | `/api/:sheet/renameTab=:tab/to=:newTab` | 改分頁名稱 |
+| PUT | `/api/:sheet/moveTab=:tab/toIndex=:index` | 移動分頁位置（0 = 最前） |
 
-### 基本概念
+### 格式
 
-所有 API endpoint 都使用 `:sheetName` 參數來對應環境變數中的 Sheet ID：
+| Method | Path | 說明 |
+|---|---|---|
+| PUT | `/api/:sheet/tab=:tab/format` | 編輯格式（原生 `userEnteredFormat`）。body：`{ range:{startRowIndex,endRowIndex,startColumnIndex,endColumnIndex}, format:{...} }`（0-based、end exclusive） |
+| PUT | `/api/:sheet/tab=:tab/formatSimple` | 編輯格式（簡化）。body：`{ range:{...}, backgroundColor, textColor, bold, italic, fontSize, fontFamily, horizontalAlignment, verticalAlignment, wrapStrategy }` |
+| POST | `/api/:sheet/copyFormat=:sourceTab/to=:destTab` | 複製分頁格式。body：`{ source:{...}, destination:{...} }`（destination 省略則與 source 同位置） |
 
-- URL 中使用 `users` → 對應到 `SHEET_ID_USERS`
-- URL 中使用 `orders` → 對應到 `SHEET_ID_ORDERS`
+## 儲存格定位規則（重要）
 
-### 可用的 API Endpoints
+讀寫時最容易出錯的是「定位」。本 API 刻意用兩個好懂、且從讀取結果就看得到的座標，換算全交給後端：
 
-部署後的 API 網址格式：`https://your-project.vercel.app/api/...`
+| 座標 | 用什麼 | 規則 |
+|---|---|---|
+| 列（row） | `row=N` | `N=1` 是第一筆資料，**不含標題列**（= 試算表第 2 行）。與 `getRow`／`getAllRows` 是同一套編號，不必自己 +1。 |
+| 欄（col） | `col=欄位名稱` | 用**標題列的欄位名**（就是 `GET tab=:tab` 回傳物件裡的 key），**不是** A/B/C 欄位字母。後端會自動對應到正確欄位；找不到該欄位名時回 404 並列出現有欄位。 |
 
-#### 1. 根路由
-
-```bash
-GET /api
-```
-
-返回 API 資訊和可用的 endpoints。
-
-#### 2. 健康檢查
-
-```bash
-GET /api/health
-```
-
-#### 3. 讀取資料
+**單格更新範例**（把 `商品毛利計算` 第 3 筆的「狀態」改成「已上架」）：
 
 ```bash
-GET /api/sheets/{sheetName}/data?range=Sheet1!A1:D10
-```
-
-範例：
-```bash
-curl "https://your-project.vercel.app/api/sheets/users/data?range=Sheet1!A1:D10"
-```
-
-#### 4. 新增資料（Append）
-
-```bash
-POST /api/sheets/{sheetName}/data
-Content-Type: application/json
-
-{
-  "range": "Sheet1!A:D",
-  "values": [
-    ["John", "Doe", "john@example.com", "25"],
-    ["Jane", "Smith", "jane@example.com", "30"]
-  ]
-}
-```
-
-範例：
-```bash
-curl -X POST https://your-project.vercel.app/api/sheets/users/data \
+curl -X PUT "https://sheets-api-xi.vercel.app/api/glen/tab=%E5%95%86%E5%93%81%E6%AF%9B%E5%88%A9%E8%A8%88%E7%AE%97/row=3/col=%E7%8B%80%E6%85%8B" \
   -H "Content-Type: application/json" \
-  -d '{
-    "range": "Sheet1!A:D",
-    "values": [["John", "Doe", "john@example.com", "25"]]
-  }'
+  -d '{"value":"已上架"}'
 ```
-
-#### 5. 更新資料
-
-```bash
-PUT /api/sheets/{sheetName}/data
-Content-Type: application/json
-
-{
-  "range": "Sheet1!A2:D2",
-  "values": [
-    ["Updated", "Data", "new@example.com", "28"]
-  ]
-}
-```
-
-#### 6. 清空資料
-
-```bash
-DELETE /api/sheets/{sheetName}/data?range=Sheet1!A2:D10
-```
-
-#### 7. 批次讀取多個範圍
-
-```bash
-POST /api/sheets/{sheetName}/batch-get
-Content-Type: application/json
-
-{
-  "ranges": ["Sheet1!A1:B10", "Sheet2!C1:D20"]
-}
-```
-
-#### 8. 批次更新多個範圍
-
-```bash
-POST /api/sheets/{sheetName}/batch-update
-Content-Type: application/json
-
-{
-  "data": [
-    {
-      "range": "Sheet1!A1",
-      "values": [["New Value"]]
-    },
-    {
-      "range": "Sheet2!B1",
-      "values": [["Another Value"]]
-    }
-  ]
-}
-```
-
-## 範圍格式說明
-
-Google Sheets 的範圍格式：
-
-- `Sheet1!A1:D10` - Sheet1 的 A1 到 D10 儲存格
-- `Sheet1!A:D` - Sheet1 的 A 到 D 欄（整欄）
-- `Sheet1` - 整個 Sheet1
-- `A1:D10` - 預設第一個工作表的 A1 到 D10
-
-## 注意事項
-
-1. **不要將 `.env` 和 `credentials/` 資料夾上傳到 Git**
-2. Service Account email 必須要有對應 Google Sheets 的編輯權限
-3. Sheet ID 要在環境變數中正確設定
-4. Vercel 會自動處理 CORS，所有 API 都支援跨域請求
-5. 支援同時串接多個不同的 Google Sheets
-6. 免費版 Vercel 有請求次數限制，請注意使用量
-
-## Vercel 部署優勢
-
-- ✅ **自動擴展**：根據流量自動調整資源
-- ✅ **全球 CDN**：快速的 API 回應時間
-- ✅ **HTTPS**：自動配置 SSL 憑證
-- ✅ **零維護**：無需管理伺服器
-- ✅ **Git 整合**：推送程式碼自動部署
 
 ## 錯誤處理
 
-API 會返回以下格式的錯誤：
+回傳格式：
 
 ```json
-{
-  "success": false,
-  "error": "錯誤訊息"
-}
+{ "success": false, "error": "錯誤訊息" }
 ```
 
 常見錯誤：
-- `Sheet ID not found` - 檢查環境變數是否有設定對應的 `SHEET_ID_XXX`
-- `The caller does not have permission` - Service Account 沒有該 Sheet 的權限
-- `Credentials file not found` - 檢查環境變數 `GOOGLE_CREDENTIALS_JSON` 是否正確設定
+
+- `Sheet ID not found for "xxx"` — `.env` 缺對應的 `SHEET_ID_XXX`。
+- `找不到欄位「xxx」` — `col` 需為標題列的欄位名稱（非欄位字母）；回應會列出現有欄位。
+- `The caller does not have permission` — Service Account 沒有該 Sheet 的編輯權限（見 [SETUP.md](SETUP.md)）。
+- `exceeds grid limits` — 目標列／欄超出試算表現有網格範圍。
 
 ## License
 
